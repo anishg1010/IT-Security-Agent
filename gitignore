@@ -1,0 +1,43 @@
+# --- Python ---
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+
+# --- Virtual environment ---
+venv/
+env/
+ENV/
+.venv/
+
+# --- Jupyter ---
+.ipynb_checkpoints/
+*/.ipynb_checkpoints/*
+
+# --- Environment / secrets ---
+.env
+*.env
+# NVD API key, if you paste it directly into fetch_nvd_data.py instead of using .env
+# (better: load it from an environment variable instead of hardcoding it)
+
+# --- Downloaded / generated data (large, reproducible, not source) ---
+
+
+# Keep small hand-crafted test fixtures if you want them tracked, e.g.:
+# !sample_sbom.json
+
+# --- Generated outputs ---
+
+
+# --- OS / editor cruft ---
+.DS_Store
+Thumbs.db
+.vscode/
+!.vscode/launch.json
+*.swp
+
+# --- Packaging ---
+*.egg-info/
+build/
+dist/
