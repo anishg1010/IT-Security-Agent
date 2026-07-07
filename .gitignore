@@ -22,7 +22,8 @@ ENV/
 # (better: load it from an environment variable instead of hardcoding it)
 
 # --- Downloaded / generated data (large, reproducible, not source) ---
-
+nvd_real_bulk.json
+nvd_real_bulk_pretty.json
 
 # Keep small hand-crafted test fixtures if you want them tracked, e.g.:
 # !sample_sbom.json
