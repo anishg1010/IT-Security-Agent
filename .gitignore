@@ -43,3 +43,8 @@ Thumbs.db
 build/
 dist/
 
+#week2
+venv/
+__pycache__/
+nvd_real_bulk.json
+*.pyc
