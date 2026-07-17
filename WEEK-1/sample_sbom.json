@@ -1,8 +1,0 @@
-{
-  "components": [
-    { "name": "log4j-core", "version": "2.14.1", "vendor": "apache" },
-    { "name": "openssl", "version": "1.1.1", "vendor": "openssl" },
-    { "name": "some-safe-lib", "version": "3.2.0", "vendor": "acme" },
-    { "name": "CRUD", "version": "5.0.5", "vendor": "Laravel-Backpack" }
-  ]
-}

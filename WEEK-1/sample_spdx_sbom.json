@@ -1,7 +1,0 @@
-{
-  "spdxVersion":"SPDX-2.3","name":"my-project",
-  "packages":[
-    {"SPDXID":"SPDXRef-1","name":"log4j-core","versionInfo":"2.14.1","supplier":"Organization: Apache"},
-    {"SPDXID":"SPDXRef-2","name":"openssl","versionInfo":"1.1.1","supplier":"Organization: OpenSSL"}
-  ]
-}
