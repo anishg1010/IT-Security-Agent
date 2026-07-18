@@ -41,6 +41,17 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Callable
 
+def _resolve(name):
+    """Find a data file whether run from repo root, src/, tests/, or a notebook."""
+    from pathlib import Path
+    here = Path(__file__).resolve().parent
+    for cand in (Path(name), here.parent / "data" / name,
+                 here.parent / "feeds" / name, here / name):
+        if cand.exists():
+            return str(cand)
+    return name
+
+
 
 # ---------------------------------------------------------------------------
 # The universal contract: one Component type, one confidence, one provenance.
@@ -178,6 +189,7 @@ def _detect_sbom_flavor(data: Any) -> str:
 
 def load_sbom_json(path: str) -> IngestResult:
     """Load any JSON SBOM, auto-detecting CycloneDX / SPDX / simple."""
+    path = _resolve(path)
     with open(path, "r", encoding="utf-8") as f:
         data = json.load(f)
     flavor = _detect_sbom_flavor(data)
@@ -203,6 +215,7 @@ def load_requirements_txt(path: str) -> IngestResult:
     vendor field), so we leave vendor=None and let the matcher's wildcard
     vendor logic handle it -- confidence is high on name/version, so we keep
     it at 0.9 but flag the missing vendor."""
+    path = _resolve(path)
     res = IngestResult(source="requirements")
     for line in Path(path).read_text(encoding="utf-8").splitlines():
         line = line.strip()
@@ -225,6 +238,7 @@ def load_requirements_txt(path: str) -> IngestResult:
 
 def load_package_json(path: str) -> IngestResult:
     """npm package.json dependencies + devDependencies."""
+    path = _resolve(path)
     res = IngestResult(source="package_json")
     data = json.loads(Path(path).read_text(encoding="utf-8"))
     for section in ("dependencies", "devDependencies"):
@@ -293,6 +307,7 @@ def extract_components_from_text(text: str, source: str = "image_ocr",
 def load_image(path: str, preprocess: bool = True) -> IngestResult:
     """OCR a screenshot of software (an 'About' dialog, a dependency list, a
     terminal), then extract name/version pairs. Lower confidence by design."""
+    path = _resolve(path)
     res = IngestResult(source="image_ocr")
     ok, why = _ocr_available()
     if not ok:
@@ -364,6 +379,7 @@ _IMAGE_EXTS = {".png", ".jpg", ".jpeg", ".bmp", ".tif", ".tiff", ".webp"}
 def load_any(path: str) -> IngestResult:
     """Auto-detect the input type from the file and dispatch to the right
     loader. Single funnel for users and for the agent loop."""
+    path = _resolve(path)
     p = Path(path)
     ext = p.suffix.lower()
     name = p.name.lower()

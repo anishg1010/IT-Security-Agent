@@ -1,0 +1,24 @@
+# Week 3 — IT Security Agent
+# Required (model, training, calibration, figures)
+numpy
+scikit-learn
+matplotlib
+joblib
+
+# Notebook (only if you want to open/run the .ipynb)
+jupyter
+
+# OPTIONAL — image/OCR input path only. Everything else works without these.
+# The OCR path degrades gracefully with a clear warning if they are absent.
+# pytesseract
+# pillow
+# opencv-python
+#   (pytesseract also needs the system binary:  apt install tesseract-ocr)
+
+# NOTE: the test suite and coverage runner deliberately use ONLY the Python
+# standard library (unittest + trace) — no pytest, no coverage.py needed.
+
+# Streamlit UI (optional — only needed to run the app):
+#   pip install streamlit
+#   streamlit run src/app.py
+streamlit

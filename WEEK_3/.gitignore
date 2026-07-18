@@ -1,0 +1,21 @@
+# Generated artifacts — rebuilt by running the code, never committed.
+__pycache__/
+*.py[cod]
+.ipynb_checkpoints/
+venv/
+.venv/
+
+figures/
+fig*.png
+match_model.joblib
+match_dataset.json
+
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db
+
+# NOTE: data/nvd_real_bulk.json IS committed on purpose — it is the input the
+# results depend on, so keeping it makes the work reproducible.
+# NOTE: feeds/ are downloaded, not generated. Commit them if you want the
+# grader to reproduce your exact triage; they change daily upstream.

@@ -41,9 +41,29 @@ from sklearn.metrics import (brier_score_loss, roc_auc_score, average_precision_
 from build_match_dataset import FEATURE_NAMES, build_dataset
 import it_security_agent as agent
 
+# --- path resolution (works whether run from repo root, src/, or a notebook) ---
+def _resolve(name):
+    """Find a data/feed file whether we are run from the repo root, from src/,
+    or from a notebook. Falls back to the bare name so flat layouts still work."""
+    import os
+    from pathlib import Path
+    here = Path(__file__).resolve().parent
+    for cand in (Path(name),                       # cwd / absolute
+                 here.parent / "data" / name,      # WEEK_3/data/
+                 here.parent / "feeds" / name,     # WEEK_3/feeds/
+                 here / name):                     # next to the module
+        if cand.exists():
+            return str(cand)
+    return name
+
+
 
 def load_rows(path="match_dataset.json"):
-    rows = json.load(open(path))
+    # Explicit context manager + utf-8: without these Python leaks the handle
+    # (ResourceWarning) and on Windows falls back to cp1252, which mangles any
+    # non-ASCII vendor name in the NVD data.
+    with open(path, encoding="utf-8") as f:
+        rows = json.load(f)
     X = np.array([r["features"] for r in rows], dtype=float)
     y = np.array([r["label"] for r in rows], dtype=int)
     meta = [r["meta"] for r in rows]
@@ -51,7 +71,7 @@ def load_rows(path="match_dataset.json"):
 
 
 def make_dataset_from_nvd(nvd_path="nvd_real_bulk.json", seed=1234, noise=0.5):
-    recs = agent.load_nvd_feed(nvd_path)
+    recs = agent.load_nvd_feed(_resolve(nvd_path))
     rows = build_dataset(recs, seed=seed, noise=noise)
     X = np.array([r["features"] for r in rows], dtype=float)
     y = np.array([r["label"] for r in rows], dtype=int)

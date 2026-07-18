@@ -39,6 +39,22 @@ from dataclasses import dataclass
 
 import it_security_agent as agent
 
+# --- path resolution (works whether run from repo root, src/, or a notebook) ---
+def _resolve(name):
+    """Find a data/feed file whether we are run from the repo root, from src/,
+    or from a notebook. Falls back to the bare name so flat layouts still work."""
+    import os
+    from pathlib import Path
+    here = Path(__file__).resolve().parent
+    for cand in (Path(name),                       # cwd / absolute
+                 here.parent / "data" / name,      # WEEK_3/data/
+                 here.parent / "feeds" / name,     # WEEK_3/feeds/
+                 here / name):                     # next to the module
+        if cand.exists():
+            return str(cand)
+    return name
+
+
 FEATURE_NAMES = [
     "product_exact",        # scanned product == CPE product (1/0)
     "product_substr",       # one is a substring of the other (1/0)
@@ -119,6 +135,48 @@ def harvest_cpe_facts(records) -> list[CpeFact]:
             if prod in ("*", "-", "") or v in ("*", "-", ""):
                 continue
             facts.append(CpeFact(v, prod, e, r["cve_id"]))
+    return facts
+
+
+@dataclass
+class FallbackFact:
+    """A (vendor, product, version-range) drawn from a CVE's affected[] block
+    rather than from CPE.
+
+    This population MATTERS: 744 of our 2,000 records have affected[] data but
+    NO CPE entry at all, so a CPE-only matcher is blind to more than a third of
+    the feed. The fallback path exists to cover them, and it is genuinely less
+    reliable than CPE (free-text vendor/product strings, looser version syntax),
+    which is exactly why `has_cpe_path` must be a real, varying feature rather
+    than a constant.
+    """
+    vendor: str
+    product: str
+    entry: dict          # synthesised range dict, same shape as a cpe_entry
+    cve_id: str
+
+
+def harvest_fallback_facts(records) -> list[FallbackFact]:
+    """Harvest (vendor, product, range) triples from affected[] on records that
+    have NO CPE data — the population the CPE path cannot see."""
+    facts = []
+    for r in records:
+        if r.get("cpe_entries"):
+            continue                      # CPE path already covers this record
+        for a in r.get("affected_entries", []) or []:
+            vendor = (a.get("vendor") or "").strip().lower()
+            product = (a.get("product") or "").strip().lower()
+            if not vendor or not product or vendor == "n/a" or product == "n/a":
+                continue
+            for vs in (a.get("versions") or []):
+                rng = agent._parse_range_string(vs)
+                if not rng:
+                    continue
+                # Give it the same shape a cpe_entry has, with a wildcard
+                # criteria, so featurize_pair can treat both paths uniformly.
+                entry = {"criteria": f"cpe:2.3:a:{vendor}:{product}:*:*:*:*:*:*:*:*"}
+                entry.update(rng)
+                facts.append(FallbackFact(vendor, product, entry, r["cve_id"]))
     return facts
 
 
@@ -233,16 +291,18 @@ def build_dataset(records, seed=1234, max_per_type=400, noise=0.0):
     products = sorted({f.product for f in facts})
     rows = []
 
-    def add(vend, prod, ver, fact, label, kind):
+    def add(vend, prod, ver, fact, label, kind, has_cpe=1.0):
         obs_vend, obs_prod, obs_ver = vend, prod, ver
         if noise and _rng.random() < noise:
             obs_vend, obs_prod, obs_ver = _corrupt(vend, prod, ver, _rng)
         feats = featurize_pair(obs_vend, obs_prod, obs_ver,
-                               fact.vendor, fact.product, fact.entry)
+                               fact.vendor, fact.product, fact.entry,
+                               has_cpe_path=has_cpe)
         rows.append({"features": feats, "label": label,
                      "meta": {"kind": kind, "vendor": obs_vend, "product": obs_prod,
                               "version": obs_ver, "cve": fact.cve_id,
                               "cpe_vendor": fact.vendor, "cpe_product": fact.product,
+                              "path": "cpe" if has_cpe == 1.0 else "fallback",
                               "noised": (obs_prod != prod or obs_vend != vend or obs_ver != ver)}})
 
     # ---- POSITIVES: real vendor/product, in-range version ----
@@ -302,6 +362,44 @@ def build_dataset(records, seed=1234, max_per_type=400, noise=0.0):
         n4 += 1
         if n4 >= max_per_type // 2:
             break
+
+    # ---- FALLBACK PATH rows (has_cpe_path = 0.5) ----------------------------
+    # 744 of our records have affected[] data but NO CPE. The fallback matcher
+    # covers them, and it is genuinely weaker: vendor/product are free text and
+    # version syntax is looser. Including these rows is what makes
+    # `has_cpe_path` a real feature instead of a constant, and lets the model
+    # LEARN how much to discount a fallback match rather than us asserting it.
+    fb_facts = harvest_fallback_facts(records)
+    if fb_facts:
+        n_fb = max(1, max_per_type // 3)
+        # fallback positives
+        for f in random.sample(fb_facts, min(len(fb_facts), n_fb)):
+            ver = _in_range_version(f.entry)
+            if ver is None:
+                continue
+            add(f.vendor, f.product, ver, f, 1, "fallback_true_match", has_cpe=0.5)
+        # fallback negatives: wrong version on the fallback path
+        c = 0
+        for f in random.sample(fb_facts, min(len(fb_facts), n_fb)):
+            ver = _out_of_range_version(f.entry)
+            if ver is None or agent.version_matches(ver, f.entry):
+                continue
+            add(f.vendor, f.product, ver, f, 0, "fallback_wrong_version", has_cpe=0.5)
+            c += 1
+            if c >= n_fb // 2:
+                break
+        # fallback negatives: wrong vendor on the fallback path
+        fb_vendors = sorted({f.vendor for f in fb_facts})
+        c = 0
+        for f in random.sample(fb_facts, min(len(fb_facts), n_fb)):
+            other = random.choice(fb_vendors)
+            if other == f.vendor:
+                continue
+            ver = _in_range_version(f.entry) or "1.0.0"
+            add(other, f.product, ver, f, 0, "fallback_wrong_vendor", has_cpe=0.5)
+            c += 1
+            if c >= n_fb // 2:
+                break
 
     random.shuffle(rows)
     return rows

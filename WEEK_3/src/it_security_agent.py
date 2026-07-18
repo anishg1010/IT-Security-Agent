@@ -42,6 +42,22 @@ import sys
 from dataclasses import dataclass, field
 from typing import Any
 
+# --- path resolution (works whether run from repo root, src/, or a notebook) ---
+def _resolve(name):
+    """Find a data/feed file whether we are run from the repo root, from src/,
+    or from a notebook. Falls back to the bare name so flat layouts still work."""
+    import os
+    from pathlib import Path
+    here = Path(__file__).resolve().parent
+    for cand in (Path(name),                       # cwd / absolute
+                 here.parent / "data" / name,      # WEEK_3/data/
+                 here.parent / "feeds" / name,     # WEEK_3/feeds/
+                 here / name):                     # next to the module
+        if cand.exists():
+            return str(cand)
+    return name
+
+
 
 # ---------------------------------------------------------------------------
 # Data model
@@ -140,6 +156,7 @@ def load_nvd_feed(path: str) -> list[dict[str, Any]]:
 
     Each returned record: {cve_id, description, cvss_score, cpe_strings}
     """
+    path = _resolve(path)
     with open(path, "r", encoding="utf-8") as f:
         raw = json.load(f)
 
@@ -244,6 +261,7 @@ def load_sbom(path: str) -> list[Component]:
     Plain fallback:
         [{"name": "...", "version": "...", "vendor": "..."}]
     """
+    path = _resolve(path)
     with open(path, "r", encoding="utf-8") as f:
         data = json.load(f)
 
