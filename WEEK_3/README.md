@@ -112,6 +112,155 @@ dead connection.
 
 ---
 
+## Architecture — in detail
+
+The system is a **deterministic five-stage pipeline**, not an autonomous agent.
+This is a deliberate choice: in security, every decision must be auditable and a
+human must stay in the loop wherever the model is unsure. An autonomous agent
+optimises for *minimal* human involvement — the wrong objective when a missed
+vulnerability means a breach.
+
+```
+  ┌─────────┐   ┌─────────┐   ┌────────┐   ┌──────────────┐   ┌─────────┐
+  │ 1 INPUT │──▶│2 RESOLVE│──▶│3 MATCH │──▶│  4 DECIDE    │──▶│5 EXPLAIN│
+  └─────────┘   └─────────┘   └────────┘   └──────────────┘   └─────────┘
+   SBOM/image    normalise     find CVEs    is it real? +      why, with
+   /typed        the names     in NVD       how urgent?        exact SHAP
+```
+
+### Stage 1 — Input  (`input_layer.py`)
+Accepts three sources and stamps each with a **trust score** that follows the
+data all the way to the routing decision:
+
+| Source | Parser | Trust (confidence) |
+|---|---|---|
+| CycloneDX / SPDX SBOM | `load_any` | 1.0 (machine-readable) |
+| `requirements.txt` / `package.json` | `load_requirements_txt` / `load_package_json` | 1.0 |
+| Screenshot (OCR) | `load_image` → tesseract | **0.5** (can misread) |
+| Typed manually | `load_manual` | 0.8 |
+
+The trust score is the responsible-AI hinge: a screenshot can never be trusted
+like a signed SBOM, so it enters at 0.5 and, by construction, is routed to human
+review in stage 4.
+
+### Stage 2 — Resolve  (`name_resolver.py`)
+Software names are inconsistent. `log4j-core`, `apache-log4j`, and
+`pkg:maven/org.apache.logging.log4j/log4j-core` all mean the same library. This
+stage normalises aliases, package-URL (purl) coordinates, and Maven coordinates
+to a canonical `(vendor, product, version)` triple so matching can work.
+
+### Stage 3 — Match  (`it_security_agent.py`)
+For each component, find NVD records whose CPE (Common Platform Enumeration)
+entry covers it: same vendor, same product, and a version inside the vulnerable
+range. Two matching paths:
+- **CPE path** — the structured, reliable path (1,242 of 2,000 records).
+- **Fallback path** — for the 744 records that have `affected[]` data but *no*
+  CPE. Weaker signal, and the model learns to discount it (see stage 4).
+
+Version ranges handle the four NVD range operators
+(`versionStart/EndIncluding/Excluding`) plus exact and wildcard versions.
+
+### Stage 4 — Decide  (`match_model.py` + `threat_intel.py` + `triage.py`)
+Two **separate** questions, deliberately never collapsed into one number:
+
+**(a) Is this match real?** — `match_model.py`
+A logistic-regression **classifier** trained on 1,370 labelled
+`(component, CVE)` pairs. Output is a calibrated probability 0–1 — this is the
+"confidence". Eight transparent features (name/vendor/version signals). Isotonic
+calibration so 0.8 genuinely means "right ~80% of the time". Cross-validated:
+ROC-AUC 0.96, F1 0.87.
+
+**(b) How urgent is it?** — `threat_intel.py`
+Combines four signals that answer four different questions:
+
+| Signal | Source | Question |
+|---|---|---|
+| CVSS | NVD | how bad *if* exploited? |
+| KEV | CISA | is it exploited *right now*? (fact list) |
+| EPSS | FIRST | how *likely* is exploitation? (ML model) |
+| CWE | NVD | what *kind* of weakness? |
+
+Priority bands: ACT NOW → SCHEDULE → MONITOR → BACKLOG.
+
+**(c) Route it** — `triage.py`
+Confidence decides who acts:
+
+| Confidence | Route | Meaning |
+|---|---|---|
+| ≥ 0.85 | AUTO | raise a ticket automatically |
+| 0.50–0.85 | SUGGEST | show it, human confirms |
+| < 0.50 | FLAG | human review, never auto-act |
+
+Confidence (is it real?) and priority (how urgent?) are reported **separately**.
+Collapsing them into one score would hide uncertainty from the person who has to
+act — "urgent but unsure" and "certain but trivial" are different situations.
+
+### Stage 5 — Explain  (`xai.py`)
+For any decision, exact closed-form SHAP values show which feature drove it:
+`φ_i = w_i · (x_i − E[x_i])`. Not a sampled approximation — exact, and verified
+in the test suite (`Σφ + base = logit`). A security engineer can defend every
+alert.
+
+### The two interfaces  (`scan_cli.py`, `app.py`)
+Same engine, two front doors for the same user (a security engineer):
+- **CLI** — for pipelines and terminals. Composable (`--json | jq`), returns a
+  CI exit code keyed on ACT NOW findings only.
+- **Streamlit** — for investigation. Upload, rank, click for reasoning, toggle
+  live-feed refresh.
+
+---
+
+## Code flow — in detail
+
+What actually happens, in order, when a scan runs (this is the path through the
+notebook, the CLI, and the app — they all share it):
+
+```
+1. INGEST
+   input_layer.load_any(file)
+     → detects CycloneDX / SPDX / requirements / image
+     → returns IngestResult(components, warnings, source, confidence)
+
+2. RESOLVE  (inside the matcher, per component)
+   name_resolver.resolve_component(name, version, vendor)
+     → canonical (vendor, product, version)
+
+3. LOAD DATA
+   it_security_agent.load_nvd_feed("nvd_real_bulk.json")   → 2000 records
+   threat_intel.load_threat_intel(kev_path, epss_path)     → KEV set + EPSS map
+     → if a feed is missing: warn loudly, continue in DEGRADED mode
+
+4. MATCH
+   it_security_agent.scan(components, records)
+     → for each component: match_component() (CPE path)
+                           match_component_fallback() (affected[] path)
+     → RiskReport(matches, components_unmatched)
+
+5. DECIDE + RANK
+   triage.build_findings(report, records, intel, raw_nvd)
+     → for each match:
+         confidence = model probability (match_model)   "is it real?"
+         band, reason = threat_intel.priority(cve, cvss, intel)  "how urgent?"
+         routing = route(confidence)                     AUTO / SUGGEST / FLAG
+     → rank(): sort by band, then EPSS, then CVSS, then confidence
+       (confidence is the LAST tiebreak — an urgent-but-unsure finding must not
+        be buried below a certain-but-trivial one)
+
+6. PRESENT
+   CLI  → print_human() / --json / --csv,  exit code from ACT NOW count
+   app  → ranked list, expanders with per-finding explanation
+   nb   → inline figures from visuals.py, live from the model
+
+7. EXPLAIN (on demand)
+   xai.explain_row(model, X, i)  → exact SHAP contributions per feature
+```
+
+**Degraded mode is a first-class path, not an error.** If KEV/EPSS are absent,
+the pipeline still completes — it just prioritises on CVSS alone and says so.
+A tool that silently loses a signal is more dangerous than one that fails loudly.
+
+---
+
 ## What Week 3 delivers
 
 | Requirement | Where | Result |
